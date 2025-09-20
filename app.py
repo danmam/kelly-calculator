@@ -4,80 +4,188 @@ from itertools import combinations
 from math import prod
 import pandas as pd
 
+# ── Helper: convert gross return (stake included) → net return ────────────────
+def gross_to_net(gross):
+    return float(gross) - 1.0
+
+# ── Helper: implied probability from American odds ─────────────────────────────
 def american_to_prob(odds):
-    if odds is None: return None
-    if odds < 0: return -odds / (-odds + 100)
-    elif odds > 0: return 100 / (odds + 100)
-    return 0.5
+    if odds is None:
+        return 0.5
+    odds = float(odds)
+    if odds < 0:
+        p = -odds / (-odds + 100.0)
+    elif odds > 0:
+        p = 100.0 / (odds + 100.0)
+    else:
+        p = 0.5
+    return min(max(p, 1e-12), 1-1e-12)
 
-def calculate_4_leg_kelly(odds1, odds2, odds3, odds4, m1, m2, m3, m4, base_payout_4_4, base_payout_3_4):
-    p1, p2, p3, p4 = american_to_prob(odds1), american_to_prob(odds2), american_to_prob(odds3), american_to_prob(odds4)
-    q1, q2, q3, q4 = 1 - p1, 1 - p2, 1 - p3, 1 - p4
-    P_4_4 = p1 * p2 * p3 * p4
-    P_3A, P_3B, P_3C, P_3D = p1*p2*p3*q4, p1*p2*q3*p4, p1*q2*p3*p4, q1*p2*p3*p4
-    P_L = 1 - (P_4_4 + P_3A + P_3B + P_3C + P_3D)
-    b_4_4 = base_payout_4_4 * m1 * m2 * m3 * m4
-    b_3A, b_3B, b_3C, b_3D = base_payout_3_4*m1*m2*m3, base_payout_3_4*m1*m2*m4, base_payout_3_4*m1*m3*m4, base_payout_3_4*m2*m3*m4
+# ── Helper: robust root‐finder for Kelly f ─────────────────────────────────────
+def _solve_kelly(kelly_eq):
+    # no edge?
+    try:
+        if kelly_eq(0.0) <= 0:
+            return 0.0
+    except:
+        return 0.0
+    # bracket search
+    try:
+        sol = optimize.root_scalar(kelly_eq, bracket=[0.0, 0.9999], method="brentq")
+        if sol.converged and 0 <= sol.root < 1:
+            return sol.root
+    except:
+        pass
+    return 0.0
 
-    def kelly_eq(f):
-        if abs(1.0 - f) < 1e-9: return float('inf')
-        win_outcomes = [(P_4_4, b_4_4), (P_3A, b_3A), (P_3B, b_3B), (P_3C, b_3C), (P_3D, b_3D)]
-        win_sum = sum((p * b) / (1 + f * b) for p, b in win_outcomes)
+# ── 4-leg Kelly ────────────────────────────────────────────────────────────────
+def calculate_4_leg_kelly(odds, mults, net4, net3):
+    p = [american_to_prob(o) for o in odds]
+    q = [1-x for x in p]
+
+    P4 = prod(p)
+    P3 = [
+        p[0]*p[1]*p[2]*q[3],
+        p[0]*p[1]*q[2]*p[3],
+        p[0]*q[1]*p[2]*p[3],
+        q[0]*p[1]*p[2]*p[3],
+    ]
+    P_L = max(1 - (P4 + sum(P3)), 0.0)
+
+    b4 = net4 * prod(mults)
+    b3 = [
+        net3 * mults[0]*mults[1]*mults[2],
+        net3 * mults[0]*mults[1]*mults[3],
+        net3 * mults[0]*mults[2]*mults[3],
+        net3 * mults[1]*mults[2]*mults[3],
+    ]
+
+    def eq(f):
+        if not (0 <= f < 1):
+            return float("inf")
+        win_sum = (P4 * b4) / (1 + f*b4)
+        for Pi, bi in zip(P3, b3):
+            win_sum += (Pi * bi) / (1 + f*bi)
         return win_sum - (P_L / (1 - f))
 
-    context = locals()
-    if kelly_eq(0) <= 0: return 0, context
-    try:
-        sol = optimize.root_scalar(kelly_eq, bracket=[0.0, 0.9999])
-        return sol.root, context
-    except ValueError: return 0, context
+    f_star = _solve_kelly(eq)
+    ctx = {"P4": P4, "P3": P3, "P_L": P_L, "b4": b4, "b3": b3}
+    return f_star, ctx
 
+# ── 5-leg Kelly ────────────────────────────────────────────────────────────────
+def calculate_5_leg_kelly(odds, nets):
+    p = [american_to_prob(o) for o in odds]
+    q = [1-x for x in p]
+    def P(k):
+        return sum(
+            prod(p[i] for i in combo) * prod(q[j] for j in set(range(5)) - set(combo))
+            for combo in combinations(range(5), k)
+        )
+    P5, P4, P3 = P(5), P(4), P(3)
+    P_L = max(1 - (P5 + P4 + P3), 0.0)
+
+    def eq(f):
+        if not (0 <= f < 1):
+            return float("inf")
+        s = (P5 * nets[0])/(1+f*nets[0]) + (P4 * nets[1])/(1+f*nets[1]) + (P3 * nets[2])/(1+f*nets[2])
+        return s - (P_L / (1 - f))
+
+    f_star = _solve_kelly(eq)
+    ctx = {"P5": P5, "P4": P4, "P3": P3, "P_L": P_L}
+    return f_star, ctx
+
+# ── 6-leg Kelly ────────────────────────────────────────────────────────────────
+def calculate_6_leg_kelly(odds, nets):
+    p = [american_to_prob(o) for o in odds]
+    q = [1-x for x in p]
+    def P(k):
+        return sum(
+            prod(p[i] for i in combo) * prod(q[j] for j in set(range(6)) - set(combo))
+            for combo in combinations(range(6), k)
+        )
+    P6, P5, P4 = P(6), P(5), P(4)
+    P_L = max(1 - (P6 + P5 + P4), 0.0)
+
+    def eq(f):
+        if not (0 <= f < 1):
+            return float("inf")
+        s = (P6 * nets[0])/(1+f*nets[0]) + (P5 * nets[1])/(1+f*nets[1]) + (P4 * nets[2])/(1+f*nets[2])
+        return s - (P_L / (1 - f))
+
+    f_star = _solve_kelly(eq)
+    ctx = {"P6": P6, "P5": P5, "P4": P4, "P_L": P_L}
+    return f_star, ctx
+
+# ── Streamlit UI ─────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Kelly Criterion Calculator", layout="wide")
-st.title("📈 Generalized Kelly Criterion Calculator")
-st.write("Select the bet type from the sidebar to enter details and calculate the optimal stake.")
+st.title("📈 Multi-leg Kelly Criterion Calculator")
 
-st.sidebar.header("Bet Configuration")
-bet_type = st.sidebar.selectbox("Select the number of legs for the flex parlay:", ["4-Leg Flex/RR"])
+legs = st.sidebar.selectbox("Number of legs", [4, 5, 6])
 
-if bet_type == "4-Leg Flex/RR":
-    st.header("4-Leg Flex/Round Robin Inputs")
-    with st.form("4_leg_form"):
-        st.subheader("Enter American Odds")
-        col1, col2, col3, col4 = st.columns(4)
-        with col1: odds1 = st.number_input("Odds Leg 1", value=-110)
-        with col2: odds2 = st.number_input("Odds Leg 2", value=-110)
-        with col3: odds3 = st.number_input("Odds Leg 3", value=-110)
-        with col4: odds4 = st.number_input("Odds Leg 4", value=-110)
+with st.form("kelly_form"):
+    st.subheader(f"Enter odds for {legs}-leg parlay")
+    cols = st.columns(legs)
+    odds = [cols[i].number_input(f"Odds Leg {i+1}", value=-110) for i in range(legs)]
 
-        st.subheader("Enter Multipliers (default is 1.0)")
-        col1, col2, col3, col4 = st.columns(4)
-        with col1: m1 = st.number_input("Multiplier Leg 1", value=1.0, format="%.2f")
-        with col2: m2 = st.number_input("Multiplier Leg 2", value=1.0, format="%.2f")
-        with col3: m3 = st.number_input("Multiplier Leg 3", value=1.0, format="%.2f")
-        with col4: m4 = st.number_input("Multiplier Leg 4", value=1.0, format="%.2f")
+    if legs == 4:
+        st.subheader("Enter multipliers (default 1.0)")
+        mcols = st.columns(4)
+        mults = [mcols[i].number_input(f"Mult Leg {i+1}", value=1.0, format="%.2f") for i in range(4)]
+    else:
+        # no multipliers for 5/6 leg examples
+        mults = [1.0]*legs
 
-        st.subheader("Enter Gross Payouts (includes stake)")
-        col1, col2 = st.columns(2)
-        with col1: gross_4_4 = st.number_input("Payout for 4/4 Correct (gross)", value=7.2, format="%.2f")
-        with col2: gross_3_4 = st.number_input("Payout for 3/4 Correct (gross)", value=1.8, format="%.2f")
+    st.subheader("Enter gross payouts (includes stake)")
+    if legs == 4:
+        gross4 = st.number_input("4/4 gross", value=7.2, format="%.2f")
+        gross3 = st.number_input("3/4 gross", value=1.8, format="%.2f")
+        nets = [gross_to_net(gross4), gross_to_net(gross3)]
+    elif legs == 5:
+        g5 = st.number_input("5/5 gross", value=10.0, format="%.2f")
+        g4 = st.number_input("4/5 gross", value=2.0, format="%.2f")
+        g3 = st.number_input("3/5 gross", value=0.5, format="%.2f")
+        nets = list(map(gross_to_net, [g5, g4, g3]))
+    else:  # legs==6
+        g6 = st.number_input("6/6 gross", value=20.0, format="%.2f")
+        g5 = st.number_input("5/6 gross", value=2.0, format="%.2f")
+        g4 = st.number_input("4/6 gross", value=0.5, format="%.2f")
+        nets = list(map(gross_to_net, [g6, g5, g4]))
 
-        base_payout_4_4 = gross_4_4 - 1.0
-        base_payout_3_4 = gross_3_4 - 1.0
+    submitted = st.form_submit_button("Calculate Kelly stake")
 
-        submitted = st.form_submit_button("Calculate Kelly Stake")
+if submitted:
+    if legs == 4:
+        f_star, ctx = calculate_4_leg_kelly(odds, mults, nets[0], nets[1])
+        rows = [
+            ("4 of 4", ctx["P4"], ctx["b4"] if False else None),
+            *[(f"3 of 4 (miss leg {i+1})", ctx["P3"][i], None) for i in range(4)],
+            ("Lose", ctx["P_L"], -1.0)
+        ]
+    elif legs == 5:
+        f_star, ctx = calculate_5_leg_kelly(odds, nets)
+        rows = [
+            ("5 of 5", ctx["P5"], nets[0]),
+            ("4 of 5", ctx["P4"], nets[1]),
+            ("3 of 5", ctx["P3"], nets[2]),
+            ("Lose (0-2 hits)", ctx["P_L"], -1.0)
+        ]
+    else:
+        f_star, ctx = calculate_6_leg_kelly(odds, nets)
+        rows = [
+            ("6 of 6", ctx["P6"], nets[0]),
+            ("5 of 6", ctx["P5"], nets[1]),
+            ("4 of 6", ctx["P4"], nets[2]),
+            ("Lose (≤3 hits)", ctx["P_L"], -1.0)
+        ]
 
-    if submitted:
-        stake, ctx = calculate_4_leg_kelly(odds1, odds2, odds3, odds4, m1, m2, m3, m4, base_payout_4_4, base_payout_3_4)
-        st.subheader("📊 Results")
-        if stake > 0:
-            st.success(f"Optimal Stake: {stake:.2%} of your bankroll.")
-        else:
-            st.error("No profitable edge found. Recommended stake is 0%.")
+    st.subheader("📊 Results")
+    if f_star > 0:
+        st.success(f"Optimal Kelly stake: {f_star:.2%} of bankroll")
+    else:
+        st.error("No positive edge → 0% stake")
 
-        df_data = {
-            "Outcome": ["4 of 4 Wins", "3/4 (Leg 4 Fails)", "3/4 (Leg 3 Fails)", "3/4 (Leg 2 Fails)", "3/4 (Leg 1 Fails)", "Bet Loses"],
-            "Probability": [ctx['P_4_4'], ctx['P_3A'], ctx['P_3B'], ctx['P_3C'], ctx['P_3D'], ctx['P_L']],
-            "Final Payout (Net)": [ctx['b_4_4'], ctx['b_3A'], ctx['b_3B'], ctx['b_3C'], ctx['b_3D'], -1]
-        }
-        df = pd.DataFrame(df_data)
-        st.table(df.style.format({"Probability": "{:.2%}", "Final Payout (Net)": "${:.2f}"}))
+    df = pd.DataFrame(rows, columns=["Outcome", "Probability", "Net Payout"])
+    st.dataframe(
+        df.style.format({"Probability":"{:.2%}", "Net Payout":"${:.2f}"}),
+        use_container_width=True
+    )
