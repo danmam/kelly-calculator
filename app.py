@@ -156,9 +156,10 @@ with st.form("kelly_form"):
 if submitted:
     if legs == 4:
         f_star, ctx = calculate_4_leg_kelly(odds, mults, nets[0], nets[1])
+        # ✅ THIS IS THE CORRECTED SECTION
         rows = [
-            ("4 of 4", ctx["P4"], ctx["b4"] if False else None),
-            *[(f"3 of 4 (miss leg {i+1})", ctx["P3"][i], None) for i in range(4)],
+            ("4 of 4", ctx["P4"], ctx["b4"]),
+            *[(f"3 of 4 (miss leg {i+1})", ctx["P3"][i], ctx["b3"][i]) for i in range(4)],
             ("Lose", ctx["P_L"], -1.0)
         ]
     elif legs == 5:
