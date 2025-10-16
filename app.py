@@ -162,5 +162,4 @@ if submitted:
         f_star, ctx = calculate_5_leg_kelly(odds, nets)
         rows = [
             ("5 of 5", ctx["P5"], nets[0]),
-            ("4 of 5", ctx["P4"], nets[1]),
-            ("3 of 5", ctx["P3"], nets
+            ("4 of
