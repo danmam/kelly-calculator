@@ -8,7 +8,7 @@ import pandas as pd
 def gross_to_net(gross):
     return float(gross) - 1.0
 
-# ── Helper: implied probability from American odds ─────────────────────────────
+# ── Helper: implied probability from American odds ───────────────────────────
 def american_to_prob(odds):
     if odds is None:
         return 0.5
@@ -21,15 +21,13 @@ def american_to_prob(odds):
         p = 0.5
     return min(max(p, 1e-12), 1-1e-12)
 
-# ── Helper: robust root‐finder for Kelly f ─────────────────────────────────────
+# ── Helper: robust root‐finder for Kelly f ───────────────────────────────────
 def _solve_kelly(kelly_eq):
-    # no edge?
     try:
         if kelly_eq(0.0) <= 0:
             return 0.0
     except:
         return 0.0
-    # bracket search
     try:
         sol = optimize.root_scalar(kelly_eq, bracket=[0.0, 0.9999], method="brentq")
         if sol.converged and 0 <= sol.root < 1:
@@ -38,7 +36,7 @@ def _solve_kelly(kelly_eq):
         pass
     return 0.0
 
-# ── 4-leg Kelly ────────────────────────────────────────────────────────────────
+# ── 4-leg Kelly ──────────────────────────────────────────────────────────────
 def calculate_4_leg_kelly(odds, mults, net4, net3):
     p = [american_to_prob(o) for o in odds]
     q = [1-x for x in p]
@@ -72,7 +70,7 @@ def calculate_4_leg_kelly(odds, mults, net4, net3):
     ctx = {"P4": P4, "P3": P3, "P_L": P_L, "b4": b4, "b3": b3}
     return f_star, ctx
 
-# ── 5-leg Kelly ────────────────────────────────────────────────────────────────
+# ── 5-leg Kelly ──────────────────────────────────────────────────────────────
 def calculate_5_leg_kelly(odds, nets):
     p = [american_to_prob(o) for o in odds]
     q = [1-x for x in p]
@@ -94,7 +92,7 @@ def calculate_5_leg_kelly(odds, nets):
     ctx = {"P5": P5, "P4": P4, "P3": P3, "P_L": P_L}
     return f_star, ctx
 
-# ── 6-leg Kelly ────────────────────────────────────────────────────────────────
+# ── 6-leg Kelly ──────────────────────────────────────────────────────────────
 def calculate_6_leg_kelly(odds, nets):
     p = [american_to_prob(o) for o in odds]
     q = [1-x for x in p]
@@ -132,7 +130,6 @@ with st.form("kelly_form"):
         mcols = st.columns(4)
         mults = [mcols[i].number_input(f"Mult Leg {i+1}", value=1.0, format="%.2f") for i in range(4)]
     else:
-        # no multipliers for 5/6 leg examples
         mults = [1.0]*legs
 
     st.subheader("Enter gross payouts (includes stake)")
@@ -156,7 +153,6 @@ with st.form("kelly_form"):
 if submitted:
     if legs == 4:
         f_star, ctx = calculate_4_leg_kelly(odds, mults, nets[0], nets[1])
-        # ✅ THIS IS THE CORRECTED SECTION
         rows = [
             ("4 of 4", ctx["P4"], ctx["b4"]),
             *[(f"3 of 4 (miss leg {i+1})", ctx["P3"][i], ctx["b3"][i]) for i in range(4)],
@@ -167,26 +163,4 @@ if submitted:
         rows = [
             ("5 of 5", ctx["P5"], nets[0]),
             ("4 of 5", ctx["P4"], nets[1]),
-            ("3 of 5", ctx["P3"], nets[2]),
-            ("Lose (0-2 hits)", ctx["P_L"], -1.0)
-        ]
-    else:
-        f_star, ctx = calculate_6_leg_kelly(odds, nets)
-        rows = [
-            ("6 of 6", ctx["P6"], nets[0]),
-            ("5 of 6", ctx["P5"], nets[1]),
-            ("4 of 6", ctx["P4"], nets[2]),
-            ("Lose (≤3 hits)", ctx["P_L"], -1.0)
-        ]
-
-    st.subheader("📊 Results")
-    if f_star > 0:
-        st.success(f"Optimal Kelly stake: {f_star:.2%} of bankroll")
-    else:
-        st.error("No positive edge → 0% stake")
-
-    df = pd.DataFrame(rows, columns=["Outcome", "Probability", "Net Payout"])
-    st.dataframe(
-        df.style.format({"Probability":"{:.2%}", "Net Payout":"${:.2f}"}),
-        use_container_width=True
-    )
+            ("3 of 5", ctx["P3"], nets
