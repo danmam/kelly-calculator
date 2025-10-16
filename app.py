@@ -162,4 +162,45 @@ if submitted:
         f_star, ctx = calculate_5_leg_kelly(odds, nets)
         rows = [
             ("5 of 5", ctx["P5"], nets[0]),
-            ("4 of
+            ("4 of 5", ctx["P4"], nets[1]),
+            ("3 of 5", ctx["P3"], nets[2]),
+            ("Lose (0-2 hits)", ctx["P_L"], -1.0)
+        ]
+    else:  # legs == 6
+        f_star, ctx = calculate_6_leg_kelly(odds, nets)
+        rows = [
+            ("6 of 6", ctx["P6"], nets[0]),
+            ("5 of 6", ctx["P5"], nets[1]),
+            ("4 of 6", ctx["P4"], nets[2]),
+            ("Lose (≤3 hits)", ctx["P_L"], -1.0)
+        ]
+
+    # ── Results ─────────────────────────────────────────────
+    st.subheader("📊 Results")
+
+    if f_star > 0:
+        st.success(f"Optimal Kelly stake: {f_star:.2%} of bankroll")
+    else:
+        st.error("No positive edge → 0% stake")
+
+    df = pd.DataFrame(rows, columns=["Outcome", "Probability", "Net Payout"])
+    st.dataframe(
+        df.style.format({"Probability": "{:.2%}", "Net Payout": "${:.2f}"}),
+        use_container_width=True
+    )
+
+    # ✅ Expected Value as % of stake
+    ev = sum(prob * payout for _, prob, payout in rows)
+    ev_pct = ev * 100
+
+    # ✅ Quarter Kelly
+    quarter_kelly = f_star / 4
+
+    # Display metrics
+    st.info(
+        f"Expected Value: {ev_pct:.2f}% of stake\n\n"
+        f"Full Kelly fraction: {f_star:.2%} of bankroll\n\n"
+        f"Quarter Kelly fraction: {quarter_kelly:.2%} of bankroll"
+    )
+
+
