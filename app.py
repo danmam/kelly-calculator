@@ -16,7 +16,7 @@ def american_to_prob(odds):
         p = -odds / (-odds + 100.0)
     else:
         p = 100.0 / (odds + 100.0)
-    return min(max(p, 1e-12), 1-1e-12)
+    return min(max(p, 1e-12), 1 - 1e-12)
 
 # ── Helper: auto-detect odds or probability input ────────────────────────────
 def parse_odds_input(x_raw):
@@ -40,17 +40,24 @@ def parse_odds_input(x_raw):
         return 0.5
 
 # ── Helper: robust root‐finder for Kelly f ───────────────────────────────────
-def _solve_kelly(kelly_eq):
+def _solve_kelly(kelly_eq, f_upper=0.9999):
+    # Check bracket and sign change
     try:
-        if kelly_eq(0.0) <= 0:
-            return 0.0
-    except:
+        y0 = kelly_eq(0.0)
+        y1 = kelly_eq(f_upper)
+    except Exception:
+        return 0.0
+    if not (math.isfinite(y0) and math.isfinite(y1)):
+        return 0.0
+    if y0 == 0.0:
+        return 0.0
+    if y0 * y1 > 0:
         return 0.0
     try:
-        sol = optimize.root_scalar(kelly_eq, bracket=[0.0, 0.9999], method="brentq")
+        sol = optimize.root_scalar(kelly_eq, bracket=[0.0, f_upper], method="brentq")
         if sol.converged and 0 <= sol.root < 1:
             return sol.root
-    except:
+    except Exception:
         pass
     return 0.0
 
@@ -79,136 +86,238 @@ def calculate_4_leg_kelly(probabilities, mults, net4, net3):
     def eq(f):
         if not (0 <= f < 1):
             return float("inf")
-        win_sum = (P4 * b4) / (1 + f * b4)
+        s = (P4 * b4) / (1 + f * b4)
         for Pi, bi in zip(P3, b3):
-            win_sum += (Pi * bi) / (1 + f * bi)
-        return win_sum - (P_L / (1 - f))
+            denom = 1 + f * bi
+            if denom <= 0:
+                return float("inf")
+            s += (Pi * bi) / denom
+        loss_denom = 1 - f
+        if loss_denom <= 0:
+            return float("inf")
+        s -= (P_L / loss_denom)
+        return s
 
-    f_star = _solve_kelly(eq)
+    positive_b = [b4] + [bi for bi in b3 if bi > 0]
+    if positive_b:
+        f_upper = min(0.9999, min((1.0 - 1e-9) / b for b in positive_b))
+    else:
+        f_upper = 0.9999
+
+    f_star = _solve_kelly(eq, f_upper=f_upper)
     ctx = {"P4": P4, "P3": P3, "P_L": P_L, "b4": b4, "b3": b3}
     return f_star, ctx
 
-# ── 5-leg Kelly ──────────────────────────────────────────────────────────────
+# ── 5-leg Kelly (enumerated outcomes) ────────────────────────────────────────
 def calculate_5_leg_kelly(probabilities, nets, mults):
-    p = probabilities
-    q = [1 - x for x in p]
-
-    # --- Accurate Kelly Calculation (Iterative) ---
-    # 1. 5 of 5 (1 outcome)
-    P5 = prod(p)
-    b5 = nets[0] * prod(mults)
-
-    # 2. 4 of 5 (5 outcomes)
-    P4_list, b4_list = [], []
+    # Enumerate wins (exact hits)
+    wins = []
+    # 5 hits
+    for combo in combinations(range(5), 5):
+        prob = prod(probabilities[i] for i in combo)
+        payout = nets[0] * prod(mults[i] for i in combo)
+        wins.append((prob, payout, combo))
+    # 4 hits
     for combo in combinations(range(5), 4):
         miss_idx = (set(range(5)) - set(combo)).pop()
-        prob = prod(p[i] for i in combo) * q[miss_idx]
-        payout_mult = prod(mults[i] for i in combo)
-        
-        P4_list.append(prob)
-        b4_list.append(nets[1] * payout_mult)
-
-    # 3. 3 of 5 (10 outcomes)
-    P3_list, b3_list = [], []
+        prob = prod(probabilities[i] for i in combo) * (1 - probabilities[miss_idx])
+        payout = nets[1] * prod(mults[i] for i in combo)
+        wins.append((prob, payout, combo))
+    # 3 hits
     for combo in combinations(range(5), 3):
         miss_indices = set(range(5)) - set(combo)
-        prob = prod(p[i] for i in combo) * prod(q[j] for j in miss_indices)
-        payout_mult = prod(mults[i] for i in combo)
-        
-        P3_list.append(prob)
-        b3_list.append(nets[2] * payout_mult)
-    
-    # 4. Total probabilities for loss and context
-    P4_total = sum(P4_list)
-    P3_total = sum(P3_list)
-    P_L = max(1 - (P5 + P4_total + P3_total), 0.0)
-    
+        prob = prod(probabilities[i] for i in combo) * prod((1 - probabilities[j]) for j in miss_indices)
+        payout = nets[2] * prod(mults[i] for i in combo)
+        wins.append((prob, payout, combo))
+
+    # Losses (0–2 hits → payout = -1)
+    losses = []
+    for k in range(0, 3):
+        for combo in combinations(range(5), k):
+            prob = prod(probabilities[i] for i in combo) * \
+                   prod((1 - probabilities[j]) for j in set(range(5)) - set(combo))
+            losses.append((prob, combo))
+    P_L = sum(prob for prob, _ in losses)
+
+    # Kelly FOC
     def eq(f):
         if not (0 <= f < 1):
             return float("inf")
-        # Sum each individual outcome
-        s = (P5 * b5) / (1 + f * b5)
-        s += sum((Pi * bi) / (1 + f * bi) for Pi, bi in zip(P4_list, b4_list))
-        s += sum((Pi * bi) / (1 + f * bi) for Pi, bi in zip(P3_list, b3_list))
-        return s - (P_L / (1 - f))
+        s = 0.0
+        for P, b, _ in wins:
+            denom = 1 + f * b
+            if denom <= 0:
+                return float("inf")
+            s += (P * b) / denom
+        loss_denom = 1 - f
+        if loss_denom <= 0:
+            return float("inf")
+        s -= sum(prob / loss_denom for prob, _ in losses)
+        return s
 
-    f_star = _solve_kelly(eq)
-    
-    # --- Context for UI (Aggregate view of accurate data) ---
-    # Calculate probability-weighted average payouts for display
-    b4_avg = sum(p * b for p, b in zip(P4_list, b4_list)) / P4_total if P4_total > 0 else 0
-    b3_avg = sum(p * b for p, b in zip(P3_list, b3_list)) / P3_total if P3_total > 0 else 0
+    # Upper bound to keep denominators positive for all positive payouts
+    positive_b = [b for _, b, _ in wins if b > 0]
+    if positive_b:
+        f_upper = min(0.9999, min((1.0 - 1e-9) / b for b in positive_b))
+    else:
+        f_upper = 0.9999
 
-    ctx = {
-        "P5": P5, "b5": b5,
-        "P4_list": P4_list, "b4_list": b4_list,
-        "P3_list": P3_list, "b3_list": b3_list,
+    f_star = _solve_kelly(eq, f_upper=f_upper)
+
+    # EV per $1 stake
+    ev = sum(P * b for P, b, _ in wins) - P_L
+
+    # Expected log growth
+    def expected_log_growth(f):
+        terms = []
+        for P, b, _ in wins:
+            denom = 1 + f * b
+            if denom <= 0:
+                return float("-inf")
+            terms.append(P * math.log(denom))
+        denom_loss = 1 - f
+        if denom_loss <= 0:
+            return float("-inf")
+        terms.append(P_L * math.log(denom_loss))
+        return sum(terms)
+
+    # Tier aggregates for compact display
+    def tier_prob(k):
+        total = 0.0
+        for combo in combinations(range(5), k):
+            prob = prod(probabilities[i] for i in combo) * \
+                   prod((1 - probabilities[j]) for j in set(range(5)) - set(combo))
+            total += prob
+        return total
+
+    # Probability-weighted average payouts per tier (display-only)
+    P5 = tier_prob(5)
+    P4 = tier_prob(4)
+    P3 = tier_prob(3)
+    # Compute weighted average payouts using enumerated wins
+    wavg = lambda k: (
+        sum(P * b for (P, b, combo) in wins if len(combo) == k) /
+        max(1e-18, sum(P for (P, b, combo) in wins if len(combo) == k))
+    )
+
+    return {
+        "f_star": f_star,
+        "EV": ev,
+        "growth_full": expected_log_growth(f_star),
+        "growth_quarter": expected_log_growth(f_star / 4.0),
+        "wins": wins,
+        "losses": losses,
         "P_L": P_L,
-        "P4_total": P4_total, "b4_avg": b4_avg,
-        "P3_total": P3_total, "b3_avg": b3_avg
+        "tiers": {
+            "P5": P5, "P4": P4, "P3": P3,
+            "b5_avg": wavg(5), "b4_avg": wavg(4), "b3_avg": wavg(3)
+        }
     }
-    return f_star, ctx
 
-# ── 6-leg Kelly ──────────────────────────────────────────────────────────────
+# ── 6-leg Kelly (enumerated outcomes) ────────────────────────────────────────
 def calculate_6_leg_kelly(probabilities, nets, mults):
-    p = probabilities
-    q = [1 - x for x in p]
-
-    # --- Accurate Kelly Calculation (Iterative) ---
-    # 1. 6 of 6 (1 outcome)
-    P6 = prod(p)
-    b6 = nets[0] * prod(mults)
-
-    # 2. 5 of 6 (6 outcomes)
-    P5_list, b5_list = [], []
+    # Enumerate wins (exact hits)
+    wins = []
+    # 6 hits
+    for combo in combinations(range(6), 6):
+        prob = prod(probabilities[i] for i in combo)
+        payout = nets[0] * prod(mults[i] for i in combo)
+        wins.append((prob, payout, combo))
+    # 5 hits
     for combo in combinations(range(6), 5):
         miss_idx = (set(range(6)) - set(combo)).pop()
-        prob = prod(p[i] for i in combo) * q[miss_idx]
-        payout_mult = prod(mults[i] for i in combo)
-        
-        P5_list.append(prob)
-        b5_list.append(nets[1] * payout_mult)
-
-    # 3. 4 of 6 (15 outcomes)
-    P4_list, b4_list = [], []
+        prob = prod(probabilities[i] for i in combo) * (1 - probabilities[miss_idx])
+        payout = nets[1] * prod(mults[i] for i in combo)
+        wins.append((prob, payout, combo))
+    # 4 hits
     for combo in combinations(range(6), 4):
         miss_indices = set(range(6)) - set(combo)
-        prob = prod(p[i] for i in combo) * prod(q[j] for j in miss_indices)
-        payout_mult = prod(mults[i] for i in combo)
-        
-        P4_list.append(prob)
-        b4_list.append(nets[2] * payout_mult)
-    
-    # 4. Total probabilities for loss and context
-    P5_total = sum(P5_list)
-    P4_total = sum(P4_list)
-    P_L = max(1 - (P6 + P5_total + P4_total), 0.0)
+        prob = prod(probabilities[i] for i in combo) * prod((1 - probabilities[j]) for j in miss_indices)
+        payout = nets[2] * prod(mults[i] for i in combo)
+        wins.append((prob, payout, combo))
 
+    # Losses (0–3 hits → payout = -1)
+    losses = []
+    for k in range(0, 4):
+        for combo in combinations(range(6), k):
+            prob = prod(probabilities[i] for i in combo) * \
+                   prod((1 - probabilities[j]) for j in set(range(6)) - set(combo))
+            losses.append((prob, combo))
+    P_L = sum(prob for prob, _ in losses)
+
+    # Kelly FOC
     def eq(f):
         if not (0 <= f < 1):
             return float("inf")
-        # Sum each individual outcome
-        s = (P6 * b6) / (1 + f * b6)
-        s += sum((Pi * bi) / (1 + f * bi) for Pi, bi in zip(P5_list, b5_list))
-        s += sum((Pi * bi) / (1 + f * bi) for Pi, bi in zip(P4_list, b4_list))
-        return s - (P_L / (1 - f))
+        s = 0.0
+        for P, b, _ in wins:
+            denom = 1 + f * b
+            if denom <= 0:
+                return float("inf")
+            s += (P * b) / denom
+        loss_denom = 1 - f
+        if loss_denom <= 0:
+            return float("inf")
+        s -= sum(prob / loss_denom for prob, _ in losses)
+        return s
 
-    f_star = _solve_kelly(eq)
+    positive_b = [b for _, b, _ in wins if b > 0]
+    if positive_b:
+        f_upper = min(0.9999, min((1.0 - 1e-9) / b for b in positive_b))
+    else:
+        f_upper = 0.9999
 
-    # --- Context for UI (Aggregate view of accurate data) ---
-    # Calculate probability-weighted average payouts for display
-    b5_avg = sum(p * b for p, b in zip(P5_list, b5_list)) / P5_total if P5_total > 0 else 0
-    b4_avg = sum(p * b for p, b in zip(P4_list, b4_list)) / P4_total if P4_total > 0 else 0
+    f_star = _solve_kelly(eq, f_upper=f_upper)
 
-    ctx = {
-        "P6": P6, "b6": b6,
-        "P5_list": P5_list, "b5_list": b5_list,
-        "P4_list": P4_list, "b4_list": b4_list,
+    # EV per $1 stake
+    ev = sum(P * b for P, b, _ in wins) - P_L
+
+    # Expected log growth
+    def expected_log_growth(f):
+        terms = []
+        for P, b, _ in wins:
+            denom = 1 + f * b
+            if denom <= 0:
+                return float("-inf")
+            terms.append(P * math.log(denom))
+        denom_loss = 1 - f
+        if denom_loss <= 0:
+            return float("-inf")
+        terms.append(P_L * math.log(denom_loss))
+        return sum(terms)
+
+    # Tier aggregates for compact display
+    def tier_prob(k):
+        total = 0.0
+        for combo in combinations(range(6), k):
+            prob = prod(probabilities[i] for i in combo) * \
+                   prod((1 - probabilities[j]) for j in set(range(6)) - set(combo))
+            total += prob
+        return total
+
+    P6 = tier_prob(6)
+    P5 = tier_prob(5)
+    P4 = tier_prob(4)
+
+    # Probability-weighted average payouts per tier (display-only)
+    wavg = lambda k: (
+        sum(P * b for (P, b, combo) in wins if len(combo) == k) /
+        max(1e-18, sum(P for (P, b, combo) in wins if len(combo) == k))
+    )
+
+    return {
+        "f_star": f_star,
+        "EV": ev,
+        "growth_full": expected_log_growth(f_star),
+        "growth_quarter": expected_log_growth(f_star / 4.0),
+        "wins": wins,
+        "losses": losses,
         "P_L": P_L,
-        "P5_total": P5_total, "b5_avg": b5_avg,
-        "P4_total": P4_total, "b4_avg": b4_avg
+        "tiers": {
+            "P6": P6, "P5": P5, "P4": P4,
+            "b6_avg": wavg(6), "b5_avg": wavg(5), "b4_avg": wavg(4)
+        }
     }
-    return f_star, ctx
 
 # ── Streamlit UI ─────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Kelly Criterion Calculator", layout="wide")
@@ -250,79 +359,73 @@ if submitted:
     # Compute Kelly and build outcome rows
     if legs == 4:
         f_star, ctx = calculate_4_leg_kelly(probabilities, mults, nets[0], nets[1])
-        # For 4-leg, 'rows' is already the full calculation set
         rows = [
             ("4 of 4", ctx["P4"], ctx["b4"]),
             *[(f"3 of 4 (miss leg {i+1})", ctx["P3"][i], ctx["b3"][i]) for i in range(4)],
             ("Lose", ctx["P_L"], -1.0),
         ]
-        display_rows = rows
+        # EV and growth computed from explicit rows (homogeneous payouts per outcome)
+        ev = sum(prob * payout for _, prob, payout in rows)
+        growth_full = sum(
+            prob * math.log(1 + f_star * payout)
+            for _, prob, payout in rows
+            if (1 + f_star * payout) > 0
+        )
+        growth_quarter = sum(
+            prob * math.log(1 + (f_star / 4.0) * payout)
+            for _, prob, payout in rows
+            if (1 + (f_star / 4.0) * payout) > 0
+        )
     elif legs == 5:
-        f_star, ctx = calculate_5_leg_kelly(probabilities, nets, mults)
-        # 'display_rows' is for the UI (aggregated)
-        display_rows = [
-            ("5 of 5", ctx["P5"], ctx["b5"]),
-            ("4 of 5", ctx["P4_total"], ctx["b4_avg"]),
-            ("3 of 5", ctx["P3_total"], ctx["b3_avg"]),
-            ("Lose (0-2 hits)", ctx["P_L"], -1.0),
+        result = calculate_5_leg_kelly(probabilities, nets, mults)
+        f_star = result["f_star"]
+        tiers = result["tiers"]
+        rows = [
+            ("5 of 5", tiers["P5"], tiers["b5_avg"]),
+            ("4 of 5", tiers["P4"], tiers["b4_avg"]),
+            ("3 of 5", tiers["P3"], tiers["b3_avg"]),
+            ("Lose (0–2 hits)", result["P_L"], -1.0),
         ]
-        # 'calc_rows' is for EV/Growth (all individual outcomes)
-        calc_rows = [("5 of 5", ctx["P5"], ctx["b5"])]
-        calc_rows.extend(zip(["4 of 5"]*len(ctx["P4_list"]), ctx["P4_list"], ctx["b4_list"]))
-        calc_rows.extend(zip(["3 of 5"]*len(ctx["P3_list"]), ctx["P3_list"], ctx["b3_list"]))
-        calc_rows.append(("Lose", ctx["P_L"], -1.0))
-        rows = calc_rows # Use full list for calculations
+        # EV and growth from enumerated outcomes
+        ev = result["EV"]
+        growth_full = result["growth_full"]
+        growth_quarter = result["growth_quarter"]
     else:  # legs == 6
-        f_star, ctx = calculate_6_leg_kelly(probabilities, nets, mults)
-        # 'display_rows' is for the UI (aggregated)
-        display_rows = [
-            ("6 of 6", ctx["P6"], ctx["b6"]),
-            ("5 of 6", ctx["P5_total"], ctx["b5_avg"]),
-            ("4 of 6", ctx["P4_total"], ctx["b4_avg"]),
-            ("Lose (≤3 hits)", ctx["P_L"], -1.0),
+        result = calculate_6_leg_kelly(probabilities, nets, mults)
+        f_star = result["f_star"]
+        tiers = result["tiers"]
+        rows = [
+            ("6 of 6", tiers["P6"], tiers["b6_avg"]),
+            ("5 of 6", tiers["P5"], tiers["b5_avg"]),
+            ("4 of 6", tiers["P4"], tiers["b4_avg"]),
+            ("Lose (≤3 hits)", result["P_L"], -1.0),
         ]
-        # 'calc_rows' is for EV/Growth (all individual outcomes)
-        calc_rows = [("6 of 6", ctx["P6"], ctx["b6"])]
-        calc_rows.extend(zip(["5 of 6"]*len(ctx["P5_list"]), ctx["P5_list"], ctx["b5_list"]))
-        calc_rows.extend(zip(["4 of 6"]*len(ctx["P4_list"]), ctx["P4_list"], ctx["b4_list"]))
-        calc_rows.append(("Lose", ctx["P_L"], -1.0))
-        rows = calc_rows # Use full list for calculations
+        # EV and growth from enumerated outcomes
+        ev = result["EV"]
+        growth_full = result["growth_full"]
+        growth_quarter = result["growth_quarter"]
 
     # Results header
     st.subheader("📊 Results")
 
-    # Outcome table (use display_rows)
-    df = pd.DataFrame(display_rows, columns=["Outcome", "Probability", "Net Payout"])
+    # Outcome table (compact tier view)
+    df = pd.DataFrame(rows, columns=["Outcome", "Probability", "Net Payout"])
     st.dataframe(
-        df.style.format({"Probability": "{:.2%}", "Net Payout": "${:.2f}"}),
+        df.style.format({"Probability": "{:.4%}", "Net Payout": "${:.4f}"}),
         use_container_width=True
     )
 
-    # Expected value (% of stake) from rows (use full 'rows' list)
-    ev = sum(prob * payout for _, prob, payout in rows)
-    ev_pct = ev * 100
+    # Expected value (% of stake)
+    ev_pct = ev * 100.0
 
     # Kelly fractions and stakes
-    quarter_kelly = f_star / 4
+    quarter_kelly = f_star / 4.0
     full_stake = f_star * bankroll
     quarter_stake = quarter_kelly * bankroll
 
-    # Expected log growth (only valid when 1 + f * payout > 0)
-    # This now correctly uses the full 'rows' list for all leg counts
-    growth_full = sum(
-        prob * math.log(1 + f_star * payout)
-        for _, prob, payout in rows
-        if (1 + f_star * payout) > 0
-    )
-    growth_quarter = sum(
-        prob * math.log(1 + quarter_kelly * payout)
-        for _, prob, payout in rows
-        if (1 + quarter_kelly * payout) > 0
-    )
-
-    # --- Calculate growth in Basis Points (BPS) ---
-    growth_full_bps = (math.exp(growth_full) - 1) * 10000
-    growth_quarter_bps = (math.exp(growth_quarter) - 1) * 10000
+    # Expected bankroll growth in basis points (convert from log growth to geometric bps)
+    growth_full_bps = (math.exp(growth_full) - 1) * 10000.0
+    growth_quarter_bps = (math.exp(growth_quarter) - 1) * 10000.0
 
     # Display metrics
     if f_star > 0:
@@ -331,11 +434,11 @@ if submitted:
         st.error("No positive edge → 0% stake")
 
     st.info(
-        f"Expected Value: {ev_pct:.2f}% of stake\n\n"
-        f"Full Kelly fraction: {f_star:.2%} → Stake ${full_stake:.2f}\n"
-        f"Expected bankroll growth (Full Kelly): {growth_full_bps:.2f} BPS\n"
-        f" (Log growth: {growth_full:.6f})\n\n"
-        f"Quarter Kelly fraction: {quarter_kelly:.2%} → Stake ${quarter_stake:.2f}\n"
-        f"Expected bankroll growth (Quarter Kelly): {growth_quarter_bps:.2f} BPS\n"
-        f" (Log growth: {growth_quarter:.6f})"
+        f"Expected Value: {ev_pct:.4f}% of stake\n\n"
+        f"Full Kelly fraction: {f_star:.4%} → Stake ${full_stake:.4f}\n"
+        f"Expected bankroll growth (Full Kelly): {growth_full_bps:.4f} BPS\n"
+        f" (Log growth: {growth_full:.8f})\n\n"
+        f"Quarter Kelly fraction: {quarter_kelly:.4%} → Stake ${quarter_stake:.4f}\n"
+        f"Expected bankroll growth (Quarter Kelly): {growth_quarter_bps:.4f} BPS\n"
+        f" (Log growth: {growth_quarter:.8f})"
     )
