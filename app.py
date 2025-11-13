@@ -93,28 +93,53 @@ def calculate_5_leg_kelly(probabilities, nets, mults):
     p = probabilities
     q = [1 - x for x in p]
 
-    def P(k):
-        return sum(
-            prod(p[i] for i in combo) * prod(q[j] for j in set(range(5)) - set(combo))
-            for combo in combinations(range(5), k)
-        )
-
-    P5, P4, P3 = P(5), P(4), P(3)
-    P_L = max(1 - (P5 + P4 + P3), 0.0)
-
-    # Payout scaling by multipliers (simplified anchoring)
+    # --- Accurate Kelly Calculation (Iterative) ---
+    # 1. 5 of 5 (1 outcome)
+    P5 = prod(p)
     b5 = nets[0] * prod(mults)
-    b4 = nets[1] * prod(mults[:4])
-    b3 = nets[2] * prod(mults[:3])
 
+    # 2. 4 of 5 (5 outcomes)
+    P4_list, b4_list = [], []
+    for combo in combinations(range(5), 4):
+        miss_idx = (set(range(5)) - set(combo)).pop()
+        prob = prod(p[i] for i in combo) * q[miss_idx]
+        payout_mult = prod(mults[i] for i in combo)
+        
+        P4_list.append(prob)
+        b4_list.append(nets[1] * payout_mult)
+
+    # 3. 3 of 5 (10 outcomes)
+    P3_list, b3_list = [], []
+    for combo in combinations(range(5), 3):
+        miss_indices = set(range(5)) - set(combo)
+        prob = prod(p[i] for i in combo) * prod(q[j] for j in miss_indices)
+        payout_mult = prod(mults[i] for i in combo)
+        
+        P3_list.append(prob)
+        b3_list.append(nets[2] * payout_mult)
+    
+    # 4. Total probabilities for loss and context
+    P4_total = sum(P4_list)
+    P3_total = sum(P3_list)
+    P_L = max(1 - (P5 + P4_total + P3_total), 0.0)
+    
     def eq(f):
         if not (0 <= f < 1):
             return float("inf")
-        s = (P5 * b5) / (1 + f * b5) + (P4 * b4) / (1 + f * b4) + (P3 * b3) / (1 + f * b3)
+        # Sum each individual outcome
+        s = (P5 * b5) / (1 + f * b5)
+        s += sum((Pi * bi) / (1 + f * bi) for Pi, bi in zip(P4_list, b4_list))
+        s += sum((Pi * bi) / (1 + f * bi) for Pi, bi in zip(P3_list, b3_list))
         return s - (P_L / (1 - f))
 
     f_star = _solve_kelly(eq)
-    ctx = {"P5": P5, "P4": P4, "P3": P3, "P_L": P_L, "b5": b5, "b4": b4, "b3": b3}
+    
+    # --- Context for UI (Aggregate view of accurate data) ---
+    # Calculate probability-weighted average payouts for display
+    b4_avg = sum(p * b for p, b in zip(P4_list, b4_list)) / P4_total if P4_total > 0 else 0
+    b3_avg = sum(p * b for p, b in zip(P3_list, b3_list)) / P3_total if P3_total > 0 else 0
+
+    ctx = {"P5": P5, "P4": P4_total, "P3": P3_total, "P_L": P_L, "b5": b5, "b4": b4_avg, "b3": b3_avg}
     return f_star, ctx
 
 # ── 6-leg Kelly ──────────────────────────────────────────────────────────────
@@ -122,27 +147,53 @@ def calculate_6_leg_kelly(probabilities, nets, mults):
     p = probabilities
     q = [1 - x for x in p]
 
-    def P(k):
-        return sum(
-            prod(p[i] for i in combo) * prod(q[j] for j in set(range(6)) - set(combo))
-            for combo in combinations(range(6), k)
-        )
-
-    P6, P5, P4 = P(6), P(5), P(4)
-    P_L = max(1 - (P6 + P5 + P4), 0.0)
-
+    # --- Accurate Kelly Calculation (Iterative) ---
+    # 1. 6 of 6 (1 outcome)
+    P6 = prod(p)
     b6 = nets[0] * prod(mults)
-    b5 = nets[1] * prod(mults[:5])
-    b4 = nets[2] * prod(mults[:4])
+
+    # 2. 5 of 6 (6 outcomes)
+    P5_list, b5_list = [], []
+    for combo in combinations(range(6), 5):
+        miss_idx = (set(range(6)) - set(combo)).pop()
+        prob = prod(p[i] for i in combo) * q[miss_idx]
+        payout_mult = prod(mults[i] for i in combo)
+        
+        P5_list.append(prob)
+        b5_list.append(nets[1] * payout_mult)
+
+    # 3. 4 of 6 (15 outcomes)
+    P4_list, b4_list = [], []
+    for combo in combinations(range(6), 4):
+        miss_indices = set(range(6)) - set(combo)
+        prob = prod(p[i] for i in combo) * prod(q[j] for j in miss_indices)
+        payout_mult = prod(mults[i] for i in combo)
+        
+        P4_list.append(prob)
+        b4_list.append(nets[2] * payout_mult)
+    
+    # 4. Total probabilities for loss and context
+    P5_total = sum(P5_list)
+    P4_total = sum(P4_list)
+    P_L = max(1 - (P6 + P5_total + P4_total), 0.0)
 
     def eq(f):
         if not (0 <= f < 1):
             return float("inf")
-        s = (P6 * b6) / (1 + f * b6) + (P5 * b5) / (1 + f * b5) + (P4 * b4) / (1 + f * b4)
+        # Sum each individual outcome
+        s = (P6 * b6) / (1 + f * b6)
+        s += sum((Pi * bi) / (1 + f * bi) for Pi, bi in zip(P5_list, b5_list))
+        s += sum((Pi * bi) / (1 + f * bi) for Pi, bi in zip(P4_list, b4_list))
         return s - (P_L / (1 - f))
 
     f_star = _solve_kelly(eq)
-    ctx = {"P6": P6, "P5": P5, "P4": P4, "P_L": P_L, "b6": b6, "b5": b5, "b4": b4}
+
+    # --- Context for UI (Aggregate view of accurate data) ---
+    # Calculate probability-weighted average payouts for display
+    b5_avg = sum(p * b for p, b in zip(P5_list, b5_list)) / P5_total if P5_total > 0 else 0
+    b4_avg = sum(p * b for p, b in zip(P4_list, b4_list)) / P4_total if P4_total > 0 else 0
+
+    ctx = {"P6": P6, "P5": P5_total, "P4": P4_total, "P_L": P_L, "b6": b6, "b5": b5_avg, "b4": b4_avg}
     return f_star, ctx
 
 # ── Streamlit UI ─────────────────────────────────────────────────────────────
