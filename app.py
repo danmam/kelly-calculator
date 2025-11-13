@@ -289,6 +289,10 @@ if submitted:
         if (1 + quarter_kelly * payout) > 0
     )
 
+    # --- Calculate growth in Basis Points (BPS) ---
+    growth_full_bps = (math.exp(growth_full) - 1) * 10000
+    growth_quarter_bps = (math.exp(growth_quarter) - 1) * 10000
+
     # Display metrics
     if f_star > 0:
         st.success(f"Optimal Kelly fraction: {f_star:.2%} of bankroll")
@@ -297,8 +301,10 @@ if submitted:
 
     st.info(
         f"Expected Value: {ev_pct:.2f}% of stake\n\n"
-        f"Full Kelly fraction: {f_star:.2%} → Stake ${full_stake:.2f}\n\n"
-        f"Quarter Kelly fraction: {quarter_kelly:.2%} → Stake ${quarter_stake:.2f}\n\n"
-        f"Expected log growth (Full Kelly): {growth_full:.6f}\n\n"
-        f"Expected log growth (Quarter Kelly): {growth_quarter:.6f}"
+        f"Full Kelly fraction: {f_star:.2%} → Stake ${full_stake:.2f}\n"
+        f"Expected bankroll growth (Full Kelly): {growth_full_bps:.2f} BPS\n"
+        f" (Log growth: {growth_full:.6f})\n\n"
+        f"Quarter Kelly fraction: {quarter_kelly:.2%} → Stake ${quarter_stake:.2f}\n"
+        f"Expected bankroll growth (Quarter Kelly): {growth_quarter_bps:.2f} BPS\n"
+        f" (Log growth: {growth_quarter:.6f})"
     )
