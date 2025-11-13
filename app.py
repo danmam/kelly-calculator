@@ -37,21 +37,11 @@ def parse_odds_input(x_raw):
 # ── Solver: improved _solve_kelly with candidate evaluation
 def _solve_kelly_and_pick(kelly_eq, expected_log_growth, positive_b, eps=1e-12,
                           safety_fraction=0.999999, f_upper_cap=0.9999):
-    """
-    Solve kelly_eq(f) = 0 on (0, f_upper). Return (f_pick, info)
-    - if eq(0) and eq(f_upper) signs differ -> find root with brentq -> candidate root
-    - if both positive -> candidate = f_upper * safety_fraction (boundary)
-    - if both non-positive -> candidate = 0
-    Then evaluate expected_log_growth at candidates [0, root(if found), f_bound]
-    and pick the finite maximum. Return info dict including which candidate chosen.
-    """
-    # determine f_upper from positive_b list (caller can pass precomputed positive_b)
     if positive_b:
         f_upper = min(f_upper_cap, min((1.0 - 1e-9) / b for b in positive_b))
     else:
         f_upper = f_upper_cap
 
-    # Evaluate endpoints
     try:
         y0 = kelly_eq(0.0)
     except Exception:
@@ -62,29 +52,21 @@ def _solve_kelly_and_pick(kelly_eq, expected_log_growth, positive_b, eps=1e-12,
         y1 = float("nan")
 
     if not (math.isfinite(y0) and math.isfinite(y1)):
-        # fallback: return 0 with info
         return 0.0, {"method": "invalid_endpoints", "f_upper": f_upper}
 
-    # Prepare candidates
     candidates = {"zero": 0.0}
-    # candidate: boundary (safe inside singularity)
     f_bound = f_upper * safety_fraction
     candidates["bound"] = f_bound
 
-    # candidate: root if sign change
     root = None
     if abs(y0) <= eps:
-        # root at zero (no positive edge)
         root = 0.0
         candidates["root"] = root
     elif y0 > 0 and y1 > 0:
-        # FOC positive everywhere on [0, f_upper] -> optimum at boundary
         root = None
     elif y0 <= 0 and y1 <= 0:
-        # FOC non-positive everywhere -> no positive edge
         root = None
     else:
-        # sign change exists -> try to find root
         try:
             sol = optimize.root_scalar(kelly_eq, bracket=[0.0, f_upper], method="brentq")
             if sol.converged and 0 <= sol.root < 1:
@@ -93,24 +75,21 @@ def _solve_kelly_and_pick(kelly_eq, expected_log_growth, positive_b, eps=1e-12,
         except Exception:
             root = None
 
-    # Evaluate expected_log_growth at each candidate, keep finite values
     evals = {}
     for name, f in candidates.items():
         try:
             val = expected_log_growth(f)
         except Exception:
             val = float("-inf")
-        # treat non-finite as -inf so it won't be picked
         if not math.isfinite(val):
             val = float("-inf")
         evals[name] = (f, val)
 
-    # Pick candidate with maximum log-growth
     best_name, (f_pick, g_pick) = max(evals.items(), key=lambda kv: (math.isfinite(kv[1][1]), kv[1][1]))
 
     info = {
         "f_upper": f_upper,
-        "candidates": {k: v[0] for k, v in candidates.items()},
+        "candidates": {k: v for k, v in candidates.items()},
         "evals": {k: v[1] for k, v in evals.items()},
         "chosen": best_name,
         "root_found": root is not None,
@@ -118,7 +97,7 @@ def _solve_kelly_and_pick(kelly_eq, expected_log_growth, positive_b, eps=1e-12,
     }
     return f_pick, info
 
-# ── 4-leg Kelly (unchanged semantics, uses new solver)
+# ── 4-leg Kelly
 def calculate_4_leg_kelly(probabilities, mults, net4, net3):
     p = probabilities
     q = [1 - x for x in p]
@@ -140,13 +119,11 @@ def calculate_4_leg_kelly(probabilities, mults, net4, net3):
         net3 * mults[1] * mults[2] * mults[3],
     ]
 
-    # Build enumerated wins/losses for EV and growth
     wins = [(P4, b4, tuple(range(4)))]
     for Pi, bi, idx in zip(P3, b3, range(4)):
         wins.append((Pi, bi, (idx,)))
 
     losses = []
-    # any outcome with <3 hits -> loss
     for k in range(0, 3):
         for combo in combinations(range(4), k):
             prob = prod(probabilities[i] for i in combo) * prod((1 - probabilities[j]) for j in set(range(4)) - set(combo))
@@ -169,7 +146,7 @@ def calculate_4_leg_kelly(probabilities, mults, net4, net3):
         return s
 
     positive_b = [b for _, b, _ in wins if b > 0]
-    # expected_log_growth function for candidate eval
+
     def expected_log_growth(f):
         terms = []
         for P, b, _ in wins:
@@ -186,7 +163,6 @@ def calculate_4_leg_kelly(probabilities, mults, net4, net3):
     f_star, solver_info = _solve_kelly_and_pick(eq, expected_log_growth, positive_b)
     ev = sum(P * b for P, b, _ in wins) - P_L_enum
 
-    # Tier aggregates for display (same as before)
     ctx = {
         "P4": P4, "P3": P3, "P_L": P_L,
         "b4": b4, "b3": b3,
@@ -195,28 +171,24 @@ def calculate_4_leg_kelly(probabilities, mults, net4, net3):
     }
     return f_star, ctx
 
-# ── 5-leg Kelly (enumerated outcomes)
+# ── 5-leg Kelly
 def calculate_5_leg_kelly(probabilities, nets, mults):
     wins = []
-    # 5 hits
     for combo in combinations(range(5), 5):
         prob = prod(probabilities[i] for i in combo)
         payout = nets[0] * prod(mults[i] for i in combo)
         wins.append((prob, payout, combo))
-    # 4 hits
     for combo in combinations(range(5), 4):
         miss_idx = (set(range(5)) - set(combo)).pop()
         prob = prod(probabilities[i] for i in combo) * (1 - probabilities[miss_idx])
         payout = nets[1] * prod(mults[i] for i in combo)
         wins.append((prob, payout, combo))
-    # 3 hits
     for combo in combinations(range(5), 3):
         miss_indices = set(range(5)) - set(combo)
         prob = prod(probabilities[i] for i in combo) * prod((1 - probabilities[j]) for j in miss_indices)
         payout = nets[2] * prod(mults[i] for i in combo)
         wins.append((prob, payout, combo))
 
-    # Losses (0–2 hits)
     losses = []
     for k in range(0, 3):
         for combo in combinations(range(5), k):
@@ -255,10 +227,8 @@ def calculate_5_leg_kelly(probabilities, nets, mults):
         return sum(terms)
 
     f_star, solver_info = _solve_kelly_and_pick(eq, expected_log_growth, positive_b)
-
     ev = sum(P * b for P, b, _ in wins) - P_L
 
-    # Tier aggregates for compact display
     def tier_prob(k):
         total = 0.0
         for combo in combinations(range(5), k):
@@ -289,28 +259,24 @@ def calculate_5_leg_kelly(probabilities, nets, mults):
         "f_info": solver_info
     }
 
-# ── 6-leg Kelly (enumerated outcomes)
+# ── 6-leg Kelly
 def calculate_6_leg_kelly(probabilities, nets, mults):
     wins = []
-    # 6 hits
     for combo in combinations(range(6), 6):
         prob = prod(probabilities[i] for i in combo)
         payout = nets[0] * prod(mults[i] for i in combo)
         wins.append((prob, payout, combo))
-    # 5 hits
     for combo in combinations(range(6), 5):
         miss_idx = (set(range(6)) - set(combo)).pop()
         prob = prod(probabilities[i] for i in combo) * (1 - probabilities[miss_idx])
         payout = nets[1] * prod(mults[i] for i in combo)
         wins.append((prob, payout, combo))
-    # 4 hits
     for combo in combinations(range(6), 4):
         miss_indices = set(range(6)) - set(combo)
         prob = prod(probabilities[i] for i in combo) * prod((1 - probabilities[j]) for j in miss_indices)
         payout = nets[2] * prod(mults[i] for i in combo)
         wins.append((prob, payout, combo))
 
-    # Losses (0–3 hits)
     losses = []
     for k in range(0, 4):
         for combo in combinations(range(6), k):
@@ -349,10 +315,8 @@ def calculate_6_leg_kelly(probabilities, nets, mults):
         return sum(terms)
 
     f_star, solver_info = _solve_kelly_and_pick(eq, expected_log_growth, positive_b)
-
     ev = sum(P * b for P, b, _ in wins) - P_L
 
-    # Tier aggregates for compact display
     def tier_prob(k):
         total = 0.0
         for combo in combinations(range(6), k):
@@ -385,7 +349,7 @@ def calculate_6_leg_kelly(probabilities, nets, mults):
 
 # ── Streamlit UI
 st.set_page_config(page_title="Kelly Criterion Calculator", layout="wide")
-st.title("📈 Multi-leg Kelly Criterion Calculator (Boundary-aware)")
+st.title("📈 Multi-leg Kelly Criterion Calculator (Payout-multiplier)")
 
 legs = st.sidebar.selectbox("Number of legs", [4, 5, 6])
 
@@ -414,6 +378,13 @@ with st.form("kelly_form"):
         g5 = st.number_input("5/6 gross", value=2.0, format="%.4f")
         g4 = st.number_input("4/6 gross", value=0.5, format="%.4f")
         nets = list(map(gross_to_net, [g6, g5, g4]))
+
+    # NEW: overall payout multiplier (applies to all winning payouts)
+    st.subheader("Overall payout multiplier (applies to all gross payouts)")
+    payout_multiplier = st.number_input("Payout multiplier", value=1.0, min_value=1.0, format="%.6f")
+
+    # Apply payout multiplier to nets (every payout that occurs will be scaled)
+    nets = [n * payout_multiplier for n in nets]
 
     bankroll = st.number_input("Enter your bankroll", value=1000.0, format="%.2f")
 
@@ -471,35 +442,28 @@ if submitted:
         growth_full = result["growth_full"]
         growth_quarter = result["growth_quarter"]
 
-    # Detect if chosen candidate is boundary-driven and set warning
     if solver_info is not None:
         chosen = solver_info.get("chosen")
         if chosen == "bound":
             boundary_warning = True
 
-    # Results header
     st.subheader("📊 Results")
 
-    # Outcome table (compact tier view)
     df = pd.DataFrame(rows, columns=["Outcome", "Probability", "Net Payout"])
     st.dataframe(
         df.style.format({"Probability": "{:.6%}", "Net Payout": "${:.6f}"}),
         use_container_width=True
     )
 
-    # Expected value (% of stake)
     ev_pct = ev * 100.0
 
-    # Kelly fractions and stakes
     quarter_kelly = f_star / 4.0
     full_stake = f_star * bankroll
     quarter_stake = quarter_kelly * bankroll
 
-    # Expected bankroll growth in basis points (convert from log growth to geometric bps)
     growth_full_bps = (math.exp(growth_full) - 1) * 10000.0
     growth_quarter_bps = (math.exp(growth_quarter) - 1) * 10000.0
 
-    # Display metrics and warnings
     if f_star > 0:
         st.success(f"Optimal Kelly fraction: {f_star:.6%} of bankroll")
     else:
@@ -514,6 +478,7 @@ if submitted:
         )
 
     st.info(
+        f"Payout multiplier applied: {payout_multiplier:.6f}x\n\n"
         f"Expected Value: {ev_pct:.6f}% of stake\n\n"
         f"Full Kelly fraction: {f_star:.6%} → Stake ${full_stake:.6f}\n"
         f"Expected bankroll growth (Full Kelly): {growth_full_bps:.6f} BPS\n"
