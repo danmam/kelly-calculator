@@ -39,26 +39,50 @@ def parse_odds_input(x_raw):
     else:
         return 0.5
 
-# ── Helper: robust root‐finder for Kelly f ───────────────────────────────────
-def _solve_kelly(kelly_eq, f_upper=0.9999):
-    # Check bracket and sign change
+# ── Helper: robust root‑finder for Kelly f (fixed) ───────────────────────────
+def _solve_kelly(kelly_eq, f_upper=0.9999, eps=1e-12, safety_fraction=0.999999):
+    """
+    Solve kelly_eq(f) = 0 on [0, f_upper).
+    Behavior:
+      - If kelly_eq(0) <= 0 and kelly_eq(f_upper) <= 0 -> return 0 (no edge)
+      - If kelly_eq(0) > 0 and kelly_eq(f_upper) > 0 -> growth is increasing on domain,
+        return f_upper * safety_fraction (just inside singularity)
+      - If signs differ -> use brentq to find root
+      - If any evaluation fails or is non-finite -> return 0
+    """
     try:
         y0 = kelly_eq(0.0)
+    except Exception:
+        return 0.0
+    try:
         y1 = kelly_eq(f_upper)
     except Exception:
         return 0.0
+
     if not (math.isfinite(y0) and math.isfinite(y1)):
         return 0.0
-    if y0 == 0.0:
+
+    # If root at zero
+    if abs(y0) <= eps:
         return 0.0
-    if y0 * y1 > 0:
+
+    # Both non-positive -> no positive root and no edge
+    if y0 <= 0 and y1 <= 0:
         return 0.0
+
+    # Both positive -> FOC positive across domain -> optimum at boundary
+    if y0 > 0 and y1 > 0:
+        # return slightly inside f_upper to avoid denom = 0
+        return f_upper * safety_fraction
+
+    # Otherwise signs differ -> root exists, use brentq
     try:
         sol = optimize.root_scalar(kelly_eq, bracket=[0.0, f_upper], method="brentq")
         if sol.converged and 0 <= sol.root < 1:
             return sol.root
     except Exception:
         pass
+
     return 0.0
 
 # ── 4-leg Kelly ──────────────────────────────────────────────────────────────
@@ -190,11 +214,11 @@ def calculate_5_leg_kelly(probabilities, nets, mults):
             total += prob
         return total
 
-    # Probability-weighted average payouts per tier (display-only)
     P5 = tier_prob(5)
     P4 = tier_prob(4)
     P3 = tier_prob(3)
-    # Compute weighted average payouts using enumerated wins
+
+    # Probability-weighted average payouts per tier (display-only)
     wavg = lambda k: (
         sum(P * b for (P, b, combo) in wins if len(combo) == k) /
         max(1e-18, sum(P for (P, b, combo) in wins if len(combo) == k))
@@ -333,22 +357,22 @@ with st.form("kelly_form"):
 
     st.subheader("Enter multipliers (default 1.0)")
     mcols = st.columns(legs)
-    mults = [mcols[i].number_input(f"Mult Leg {i+1}", value=1.0, format="%.2f") for i in range(legs)]
+    mults = [mcols[i].number_input(f"Mult Leg {i+1}", value=1.0, format="%.6f") for i in range(legs)]
 
     st.subheader("Enter gross payouts (includes stake)")
     if legs == 4:
-        gross4 = st.number_input("4/4 gross", value=7.2, format="%.2f")
-        gross3 = st.number_input("3/4 gross", value=1.8, format="%.2f")
+        gross4 = st.number_input("4/4 gross", value=7.2, format="%.4f")
+        gross3 = st.number_input("3/4 gross", value=1.8, format="%.4f")
         nets = [gross_to_net(gross4), gross_to_net(gross3)]
     elif legs == 5:
-        g5 = st.number_input("5/5 gross", value=10.0, format="%.2f")
-        g4 = st.number_input("4/5 gross", value=2.0, format="%.2f")
-        g3 = st.number_input("3/5 gross", value=0.5, format="%.2f")
+        g5 = st.number_input("5/5 gross", value=10.0, format="%.4f")
+        g4 = st.number_input("4/5 gross", value=2.0, format="%.4f")
+        g3 = st.number_input("3/5 gross", value=0.5, format="%.4f")
         nets = list(map(gross_to_net, [g5, g4, g3]))
     else:  # legs == 6
-        g6 = st.number_input("6/6 gross", value=20.0, format="%.2f")
-        g5 = st.number_input("5/6 gross", value=2.0, format="%.2f")
-        g4 = st.number_input("4/6 gross", value=0.5, format="%.2f")
+        g6 = st.number_input("6/6 gross", value=20.0, format="%.4f")
+        g5 = st.number_input("5/6 gross", value=2.0, format="%.4f")
+        g4 = st.number_input("4/6 gross", value=0.5, format="%.4f")
         nets = list(map(gross_to_net, [g6, g5, g4]))
 
     bankroll = st.number_input("Enter your bankroll", value=1000.0, format="%.2f")
@@ -411,7 +435,7 @@ if submitted:
     # Outcome table (compact tier view)
     df = pd.DataFrame(rows, columns=["Outcome", "Probability", "Net Payout"])
     st.dataframe(
-        df.style.format({"Probability": "{:.4%}", "Net Payout": "${:.4f}"}),
+        df.style.format({"Probability": "{:.6%}", "Net Payout": "${:.6f}"}),
         use_container_width=True
     )
 
@@ -429,16 +453,16 @@ if submitted:
 
     # Display metrics
     if f_star > 0:
-        st.success(f"Optimal Kelly fraction: {f_star:.2%} of bankroll")
+        st.success(f"Optimal Kelly fraction: {f_star:.6%} of bankroll")
     else:
         st.error("No positive edge → 0% stake")
 
     st.info(
-        f"Expected Value: {ev_pct:.4f}% of stake\n\n"
-        f"Full Kelly fraction: {f_star:.4%} → Stake ${full_stake:.4f}\n"
-        f"Expected bankroll growth (Full Kelly): {growth_full_bps:.4f} BPS\n"
-        f" (Log growth: {growth_full:.8f})\n\n"
-        f"Quarter Kelly fraction: {quarter_kelly:.4%} → Stake ${quarter_stake:.4f}\n"
-        f"Expected bankroll growth (Quarter Kelly): {growth_quarter_bps:.4f} BPS\n"
-        f" (Log growth: {growth_quarter:.8f})"
+        f"Expected Value: {ev_pct:.6f}% of stake\n\n"
+        f"Full Kelly fraction: {f_star:.6%} → Stake ${full_stake:.6f}\n"
+        f"Expected bankroll growth (Full Kelly): {growth_full_bps:.6f} BPS\n"
+        f" (Log growth: {growth_full:.12f})\n\n"
+        f"Quarter Kelly fraction: {quarter_kelly:.6%} → Stake ${quarter_stake:.6f}\n"
+        f"Expected bankroll growth (Quarter Kelly): {growth_quarter_bps:.6f} BPS\n"
+        f" (Log growth: {growth_quarter:.12f})"
     )
