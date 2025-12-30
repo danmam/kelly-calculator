@@ -361,32 +361,31 @@ with st.form("kelly_form"):
 
     st.subheader("Enter multipliers (default 1.0)")
     mcols = st.columns(legs)
-    mults = [mcols[i].number_input(f"Mult Leg {i+1}", value=1.0, format="%.6f") for i in range(legs)]
+    mults = [mcols[i].number_input(f"Mult Leg {i+1}", value=1.0, format="%.2f") for i in range(legs)]
+
+    # --- UPDATED: Overall Boost Input moved here to be used in calculation ---
+    st.subheader("Overall payout multiplier (applies to all gross payouts)")
+    # Using 'value=1.0' means no boost by default.
+    overall_boost = st.number_input("Overall Boost (e.g. 1.3 = +30%)", value=1.0, min_value=0.0, step=0.1, format="%.2f")
 
     st.subheader("Enter gross payouts (includes stake)")
+    # Logic Update: Multiply GROSS by boost, THEN convert to net.
     if legs == 4:
-        gross4 = st.number_input("4/4 gross", value=7.2, format="%.4f")
-        gross3 = st.number_input("3/4 gross", value=1.8, format="%.4f")
-        nets = [gross_to_net(gross4), gross_to_net(gross3)]
+        gross4 = st.number_input("4/4 gross", value=7.2, format="%.2f")
+        gross3 = st.number_input("3/4 gross", value=1.8, format="%.2f")
+        nets = [gross_to_net(gross4 * overall_boost), gross_to_net(gross3 * overall_boost)]
     elif legs == 5:
-        g5 = st.number_input("5/5 gross", value=10.0, format="%.4f")
-        g4 = st.number_input("4/5 gross", value=2.0, format="%.4f")
-        g3 = st.number_input("3/5 gross", value=0.5, format="%.4f")
-        nets = list(map(gross_to_net, [g5, g4, g3]))
+        g5 = st.number_input("5/5 gross", value=10.0, format="%.2f")
+        g4 = st.number_input("4/5 gross", value=2.0, format="%.2f")
+        g3 = st.number_input("3/5 gross", value=0.5, format="%.2f")
+        nets = list(map(gross_to_net, [g * overall_boost for g in [g5, g4, g3]]))
     else:  # legs == 6
-        g6 = st.number_input("6/6 gross", value=20.0, format="%.4f")
-        g5 = st.number_input("5/6 gross", value=2.0, format="%.4f")
-        g4 = st.number_input("4/6 gross", value=0.5, format="%.4f")
-        nets = list(map(gross_to_net, [g6, g5, g4]))
+        g6 = st.number_input("6/6 gross", value=20.0, format="%.2f")
+        g5 = st.number_input("5/6 gross", value=2.0, format="%.2f")
+        g4 = st.number_input("4/6 gross", value=0.5, format="%.2f")
+        nets = list(map(gross_to_net, [g * overall_boost for g in [g6, g5, g4]]))
 
-    # NEW: overall payout multiplier (applies to all winning payouts)
-    st.subheader("Overall payout multiplier (applies to all gross payouts)")
-    payout_multiplier = st.number_input("Payout multiplier", value=1.0, min_value=1.0, format="%.6f")
-
-    # Apply payout multiplier to nets (every payout that occurs will be scaled)
-    nets = [n * payout_multiplier for n in nets]
-
-    bankroll = st.number_input("Enter your bankroll", value=1000.0, format="%.2f")
+    bankroll = st.number_input("Enter your bankroll", value=8000.0, format="%.2f")
 
     submitted = st.form_submit_button("Calculate")
 
@@ -450,8 +449,12 @@ if submitted:
     st.subheader("📊 Results")
 
     df = pd.DataFrame(rows, columns=["Outcome", "Probability", "Net Payout"])
+    
+    # --- UPDATED: Rounding for cleaner display ---
+    df["Net Payout"] = df["Net Payout"].round(2)
+    
     st.dataframe(
-        df.style.format({"Probability": "{:.6%}", "Net Payout": "${:.6f}"}),
+        df.style.format({"Probability": "{:.2%}", "Net Payout": "${:.2f}"}),
         use_container_width=True
     )
 
@@ -465,7 +468,7 @@ if submitted:
     growth_quarter_bps = (math.exp(growth_quarter) - 1) * 10000.0
 
     if f_star > 0:
-        st.success(f"Optimal Kelly fraction: {f_star:.6%} of bankroll")
+        st.success(f"Optimal Kelly fraction: {f_star:.2%} of bankroll")
     else:
         st.error("No positive edge → 0% stake")
 
@@ -478,12 +481,12 @@ if submitted:
         )
 
     st.info(
-        f"Payout multiplier applied: {payout_multiplier:.6f}x\n\n"
-        f"Expected Value: {ev_pct:.6f}% of stake\n\n"
-        f"Full Kelly fraction: {f_star:.6%} → Stake ${full_stake:.6f}\n"
-        f"Expected bankroll growth (Full Kelly): {growth_full_bps:.6f} BPS\n"
-        f" (Log growth: {growth_full:.12f})\n\n"
-        f"Quarter Kelly fraction: {quarter_kelly:.6%} → Stake ${quarter_stake:.6f}\n"
-        f"Expected bankroll growth (Quarter Kelly): {growth_quarter_bps:.6f} BPS\n"
-        f" (Log growth: {growth_quarter:.12f})"
+        f"Payout multiplier applied: {overall_boost:.2f}x\n\n"
+        f"Expected Value: {ev_pct:.2f}% of stake\n\n"
+        f"Full Kelly fraction: {f_star:.2%} → Stake ${full_stake:.2f}\n"
+        f"Expected bankroll growth (Full Kelly): {growth_full_bps:.2f} BPS\n"
+        f" (Log growth: {growth_full:.6f})\n\n"
+        f"Quarter Kelly fraction: {quarter_kelly:.2%} → Stake ${quarter_stake:.2f}\n"
+        f"Expected bankroll growth (Quarter Kelly): {growth_quarter_bps:.2f} BPS\n"
+        f" (Log growth: {growth_quarter:.6f})"
     )
