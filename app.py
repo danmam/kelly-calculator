@@ -97,7 +97,7 @@ def _solve_kelly_and_pick(kelly_eq, expected_log_growth, positive_b, eps=1e-12,
     }
     return f_pick, info
 
-# ── 4-leg Kelly
+# ── 4-leg Kelly (FIXED)
 def calculate_4_leg_kelly(probabilities, mults, net4, net3):
     p = probabilities
     q = [1 - x for x in p]
@@ -111,12 +111,13 @@ def calculate_4_leg_kelly(probabilities, mults, net4, net3):
     ]
     P_L = max(1 - (P4 + sum(P3)), 0.0)
 
+    # FIX: apply multipliers to gross, then convert to net
     b4 = gross_to_net((net4 + 1) * prod(mults))
     b3 = [
-        net3 * mults[0] * mults[1] * mults[2],
-        net3 * mults[0] * mults[1] * mults[3],
-        net3 * mults[0] * mults[2] * mults[3],
-        net3 * mults[1] * mults[2] * mults[3],
+        gross_to_net((net3 + 1) * mults[0] * mults[1] * mults[2]),
+        gross_to_net((net3 + 1) * mults[0] * mults[1] * mults[3]),
+        gross_to_net((net3 + 1) * mults[0] * mults[2] * mults[3]),
+        gross_to_net((net3 + 1) * mults[1] * mults[2] * mults[3]),
     ]
 
     wins = [(P4, b4, tuple(range(4)))]
@@ -171,7 +172,7 @@ def calculate_4_leg_kelly(probabilities, mults, net4, net3):
     }
     return f_star, ctx
 
-# ── 5-leg Kelly
+# ── 5-leg Kelly (unchanged — already correct)
 def calculate_5_leg_kelly(probabilities, nets, mults):
     wins = []
     for combo in combinations(range(5), 5):
@@ -259,7 +260,7 @@ def calculate_5_leg_kelly(probabilities, nets, mults):
         "f_info": solver_info
     }
 
-# ── 6-leg Kelly
+# ── 6-leg Kelly (unchanged — already correct)
 def calculate_6_leg_kelly(probabilities, nets, mults):
     wins = []
     for combo in combinations(range(6), 6):
@@ -493,4 +494,5 @@ if submitted:
         f"Expected bankroll growth (Quarter Kelly): {growth_quarter_bps:.2f} BPS\n"
         f" (Log growth: {growth_quarter:.6f})"
     )
+
 
