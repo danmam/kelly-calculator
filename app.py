@@ -111,7 +111,7 @@ def calculate_4_leg_kelly(probabilities, mults, net4, net3):
     ]
     P_L = max(1 - (P4 + sum(P3)), 0.0)
 
-    b4 = net4 * prod(mults)
+    b4 = gross_to_net((net4 + 1) * prod(mults))
     b3 = [
         net3 * mults[0] * mults[1] * mults[2],
         net3 * mults[0] * mults[1] * mults[3],
@@ -373,7 +373,10 @@ with st.form("kelly_form"):
     if legs == 4:
         gross4 = st.number_input("4/4 gross", value=7.2, format="%.2f")
         gross3 = st.number_input("3/4 gross", value=1.8, format="%.2f")
-        nets = [gross_to_net(gross4 * overall_boost), gross_to_net(gross3 * overall_boost)]
+        nets = [
+    gross_to_net(gross4 * overall_boost * prod(mults)),   # 4/4 net
+    gross_to_net(gross3 * overall_boost * prod(mults[:3]))  # 3/4 net (only 3 legs hit)
+        ]
     elif legs == 5:
         g5 = st.number_input("5/5 gross", value=10.0, format="%.2f")
         g4 = st.number_input("4/5 gross", value=2.0, format="%.2f")
@@ -490,3 +493,4 @@ if submitted:
         f"Expected bankroll growth (Quarter Kelly): {growth_quarter_bps:.2f} BPS\n"
         f" (Log growth: {growth_quarter:.6f})"
     )
+
