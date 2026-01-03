@@ -357,7 +357,7 @@ legs = st.sidebar.selectbox("Number of legs", [4, 5, 6])
 with st.form("kelly_form"):
     st.subheader(f"Enter odds or probabilities for {legs}-leg parlay")
     cols = st.columns(legs)
-    odds_raw = [cols[i].text_input(f"Leg {i+1}", value="-110") for i in range(legs)]
+odds_raw = [cols[i].text_input(f"Leg {i+1}", value="-110") for i in range(legs)]
     probabilities = [parse_odds_input(x) for x in odds_raw]
 
     st.subheader("Enter multipliers (default 1.0)")
@@ -374,10 +374,7 @@ with st.form("kelly_form"):
     if legs == 4:
         gross4 = st.number_input("4/4 gross", value=7.2, format="%.2f")
         gross3 = st.number_input("3/4 gross", value=1.8, format="%.2f")
-        nets = [
-    gross_to_net(gross4 * overall_boost * prod(mults)),   # 4/4 net
-    gross_to_net(gross3 * overall_boost * prod(mults[:3]))  # 3/4 net (only 3 legs hit)
-        ]
+        nets = [gross_to_net(gross4 * overall_boost), gross_to_net(gross3 * overall_boost)]
     elif legs == 5:
         g5 = st.number_input("5/5 gross", value=10.0, format="%.2f")
         g4 = st.number_input("4/5 gross", value=2.0, format="%.2f")
@@ -494,5 +491,3 @@ if submitted:
         f"Expected bankroll growth (Quarter Kelly): {growth_quarter_bps:.2f} BPS\n"
         f" (Log growth: {growth_quarter:.6f})"
     )
-
-
