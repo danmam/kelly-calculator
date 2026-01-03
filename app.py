@@ -357,7 +357,7 @@ legs = st.sidebar.selectbox("Number of legs", [4, 5, 6])
 with st.form("kelly_form"):
     st.subheader(f"Enter odds or probabilities for {legs}-leg parlay")
     cols = st.columns(legs)
-odds_raw = [cols[i].text_input(f"Leg {i+1}", value="-110") for i in range(legs)]
+    odds_raw = [cols[i].text_input(f"Leg {i+1}", value="-110") for i in range(legs)]
     probabilities = [parse_odds_input(x) for x in odds_raw]
 
     st.subheader("Enter multipliers (default 1.0)")
@@ -491,3 +491,4 @@ if submitted:
         f"Expected bankroll growth (Quarter Kelly): {growth_quarter_bps:.2f} BPS\n"
         f" (Log growth: {growth_quarter:.6f})"
     )
+
